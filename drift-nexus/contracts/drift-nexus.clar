@@ -133,7 +133,7 @@
     }
 )
 
-;; Authorization check
+;; Authorization functions
 (define-private (is-contract-owner)
     (is-eq tx-sender (var-get contract-owner))
 )
@@ -151,7 +151,7 @@
     (and (>= priority u1) (<= priority u10))
 )
 
-;; Math helper functions
+;; Utility functions
 (define-private (min (a uint) (b uint))
     (if (< a b) a b)
 )
@@ -160,22 +160,18 @@
     (if (> a b) a b)
 )
 
-;; Helper function to check if a principal is in the evolution nodes list
 (define-private (is-evolution-node (node principal) (node-list (list 3 principal)))
     (is-some (index-of node-list node))
 )
 
-;; Helper function to select evolution nodes (simplified)
 (define-private (select-evolution-nodes (priority uint))
-    (list tx-sender tx-sender tx-sender) ;; Simplified - in production would select based on performance/stake
+    (list tx-sender tx-sender tx-sender) ;; Simplified selection
 )
 
-;; Helper function to get current quantum fuel price (simplified)
 (define-private (get-current-quantum-fuel-price)
-    u1000 ;; Simplified - in production would be dynamic
+    u1000 ;; Simplified pricing
 )
 
-;; Helper function to update pilot performance
 (define-private (update-pilot-performance (pilot principal) (success bool))
     (match (map-get? pilot-performance pilot)
         performance
@@ -214,7 +210,8 @@
     (begin
         (asserts! (is-contract-owner) ERR-NOT-AUTHORIZED)
         (match (map-get? dimension-bridges dimension-name)
-            bridge-info (ok (map-set dimension-bridges dimension-name
+            bridge-info 
+            (ok (map-set dimension-bridges dimension-name
                 (merge bridge-info {is-enabled: enabled})))
             ERR-INVALID-INPUT
         )
@@ -349,8 +346,8 @@
                 attestation-signature: signature
             })
             
-            ;; Update pilot statistics
-            (update-pilot-performance tx-sender true)
+            ;; Update pilot performance
+            (update-pilot-performance (get pilot race-data) true)
             
             ;; Mark race as completed
             (map-set race-queue race-id
@@ -371,7 +368,88 @@
     )
 )
 
-;; Read-only functions for querying contract state
+(define-public (create-track-template
+    (template-hash (buff 32))
+    (environmental-conditions (list 10 (string-ascii 100)))
+    (fee-per-race uint))
+    (let ((template-id (+ (var-get upgrade-counter) u1)))
+        (begin
+            (asserts! (not (var-get quantum-pause)) ERR-NOT-AUTHORIZED)
+            (asserts! (<= fee-per-race u10000) ERR-INVALID-INPUT)
+            
+            (map-set track-templates template-id {
+                creator: tx-sender,
+                template-hash: template-hash,
+                environmental-conditions: environmental-conditions,
+                is-active: true,
+                usage-count: u0,
+                fee-per-race: fee-per-race
+            })
+            
+            (var-set upgrade-counter template-id)
+            (ok template-id)
+        )
+    )
+)
+
+(define-public (deposit-upgrade-escrow
+    (amount uint)
+    (race-id uint)
+    (evolution-condition (string-ascii 50))
+    (expiry-blocks uint))
+    (let ((upgrade-id (+ (var-get upgrade-counter) u1))
+          (expiry-block (+ block-height expiry-blocks)))
+        (begin
+            (asserts! (not (var-get quantum-pause)) ERR-NOT-AUTHORIZED)
+            (asserts! (> amount u0) ERR-INVALID-INPUT)
+            (asserts! (is-some (map-get? race-queue race-id)) ERR-RACE-DATA-NOT-FOUND)
+            
+            (try! (stx-transfer? amount tx-sender (as-contract tx-sender)))
+            
+            (map-set upgrade-contracts upgrade-id {
+                depositor: tx-sender,
+                amount: amount,
+                race-id: race-id,
+                evolution-condition: evolution-condition,
+                expiry-block: expiry-block,
+                is-released: false
+            })
+            
+            (var-set upgrade-counter upgrade-id)
+            (ok upgrade-id)
+        )
+    )
+)
+
+(define-public (release-upgrade-escrow (upgrade-id uint))
+    (match (map-get? upgrade-contracts upgrade-id)
+        upgrade-data
+        (match (map-get? race-queue (get race-id upgrade-data))
+            race-data
+            (begin
+                (asserts! (get is-completed race-data) ERR-EVOLUTION-FAILED)
+                (asserts! (not (get is-released upgrade-data)) ERR-INVALID-INPUT)
+                (asserts! (<= block-height (get expiry-block upgrade-data)) ERR-RACE-EXPIRED)
+                
+                ;; Transfer funds to vehicle owner
+                (try! (as-contract (stx-transfer? 
+                    (get amount upgrade-data)
+                    tx-sender
+                    (get vehicle-owner race-data))))
+                
+                ;; Mark as released
+                (map-set upgrade-contracts upgrade-id
+                    (merge upgrade-data {is-released: true}))
+                
+                (ok true)
+            )
+            ERR-RACE-DATA-NOT-FOUND
+        )
+        ERR-UPGRADE-NOT-FOUND
+    )
+)
+
+;; Read-only functions
 (define-read-only (get-racing-pilot (pilot principal))
     (map-get? racing-pilots pilot)
 )
@@ -388,11 +466,28 @@
     (map-get? pilot-performance pilot)
 )
 
+(define-read-only (get-track-template (template-id uint))
+    (map-get? track-templates template-id)
+)
+
+(define-read-only (get-evolution-proof (race-id uint) (node principal))
+    (map-get? evolution-proofs {race-id: race-id, node: node})
+)
+
+(define-read-only (get-upgrade-contract (upgrade-id uint))
+    (map-get? upgrade-contracts upgrade-id)
+)
+
+(define-read-only (get-dimension-bridge (dimension-name (string-ascii 20)))
+    (map-get? dimension-bridges dimension-name)
+)
+
 (define-read-only (get-protocol-stats)
     {
         total-racing-pilots: (var-get total-racing-pilots),
         total-races: (var-get total-races),
         protocol-fee-rate: (var-get protocol-fee-rate),
-        quantum-pause: (var-get quantum-pause)
+        quantum-pause: (var-get quantum-pause),
+        dimension-bridge-enabled: (var-get dimension-bridge-enabled)
     }
 )
