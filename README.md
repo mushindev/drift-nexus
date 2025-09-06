@@ -1,0 +1,3 @@
+# Drift Nexus
+
+Drift Nexus is a physics-based blockchain racing game featuring customizable hover vehicles that race through procedurally generated quantum drift tracks spanning multiple interconnected dimensions. The game's innovative Dynamic Asset Evolution system enables NFT vehicles to physically evolve based on real racing performance data, environmental conditions, and cross-dimensional travel patterns. Each vehicle contains embedded smart contracts that automatically upgrade components such as engines, stabilizers, and quantum drives using actual race telemetry, creating unique assets that reflect individual player skill and journey history.
